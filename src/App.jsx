@@ -45,7 +45,7 @@ export default function App() {
       document.head.appendChild(link);
     }
     link.href =
-      'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">🎯</text></svg>';
+      'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M23.13 9.47a3.8 3.8 0 0 0-3.79-3.8H9.72a1.35 1.35 0 0 0 0 2.7h9.62c.6 0 1.09.49 1.09 1.1 0 .6-.49 1.1-1.09 1.1H2.7A2.71 2.71 0 0 0 0 13.28v.17A2.71 2.71 0 0 0 2.7 16.16h16.64a3.8 3.8 0 0 0 3.79-3.8V9.47z" fill="%23eb1700"/></svg>';
     document.title = "MSM Markup Tracker";
 
     // Load Excel Engine
