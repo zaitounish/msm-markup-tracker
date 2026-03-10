@@ -72,7 +72,7 @@ export default function App() {
     document.body.appendChild(script);
   }, []);
 
-  // --- Core Parsing & NLP Regex Engine ---
+  // --- Core Parsing & NLP Regex Engine (Highly Optimized) ---
   const processSheetData = (json, filename) => {
     let type = "Unknown";
     let cleanName = filename.replace(/\.[^/.]+$/, ""); // Remove extension
@@ -133,6 +133,14 @@ export default function App() {
           h.toLowerCase().includes("deflated rate"),
       );
 
+      // OPTIMIZATION: Pre-calculate a past timestamp to avoid lag
+      const pastTimestamp = new Date("1999-01-01T00:00:00").setHours(
+        0,
+        0,
+        0,
+        0,
+      );
+
       for (let i = headerRowIdx + 1; i < json.length; i++) {
         const row = json[i];
         if (!row) continue;
@@ -148,15 +156,30 @@ export default function App() {
             : "2000-01-01";
         if (defDate === "-" || defDate === "NaN") defDate = "2000-01-01";
 
+        // OPTIMIZATION: Pre-calculate the timestamp for filtering later
+        const dTimestamp = (
+          defDate.includes("-") && !defDate.includes("T")
+            ? new Date(defDate + "T00:00:00")
+            : new Date(defDate)
+        ).setHours(0, 0, 0, 0);
+
         rawDefRate = Math.max(0, Math.round(rawDefRate));
 
         const timeline = [];
         if (rawDefRate > 0) {
-          timeline.push({ date: "1999-01-01", rate: rawDefRate });
-          timeline.push({ date: defDate, rate: 0 });
+          timeline.push({
+            date: "1999-01-01",
+            timestamp: pastTimestamp,
+            rate: rawDefRate,
+          });
+          timeline.push({ date: defDate, timestamp: dTimestamp, rate: 0 });
         } else {
-          timeline.push({ date: "1999-01-01", rate: 0 });
-          timeline.push({ date: defDate, rate: 0 });
+          timeline.push({
+            date: "1999-01-01",
+            timestamp: pastTimestamp,
+            rate: 0,
+          });
+          timeline.push({ date: defDate, timestamp: dTimestamp, rate: 0 });
         }
 
         data.push({
@@ -173,10 +196,17 @@ export default function App() {
       const dateCols = [];
       for (let c = 1; c < headers.length; c++) {
         const h = headers[c];
-        if (h && isNaN(h) && !isNaN(Date.parse(h)))
-          dateCols.push({ index: c, dateStr: h });
+        if (h && isNaN(h) && !isNaN(Date.parse(h))) {
+          // OPTIMIZATION: Pre-calculate the timestamp for filtering exactly ONCE per column
+          const ts = (
+            h.includes("-") && !h.includes("T")
+              ? new Date(h + "T00:00:00")
+              : new Date(h)
+          ).setHours(0, 0, 0, 0);
+          dateCols.push({ index: c, dateStr: h, timestamp: ts });
+        }
       }
-      dateCols.sort((a, b) => new Date(a.dateStr) - new Date(b.dateStr));
+      dateCols.sort((a, b) => a.timestamp - b.timestamp);
 
       for (let i = headerRowIdx + 1; i < json.length; i++) {
         const row = json[i];
@@ -189,11 +219,10 @@ export default function App() {
         const timeline = dateCols.map((dc) => {
           const rawVal = row[dc.index];
           const isBlank =
-            rawVal === null ||
-            rawVal === undefined ||
+            rawVal == null ||
             rawVal === "" ||
             rawVal === "-" ||
-            String(rawVal).toLowerCase() === "nan";
+            String(rawVal).trim().toLowerCase() === "nan";
 
           let parsedRate = 0;
           if (isBlank) {
@@ -207,7 +236,7 @@ export default function App() {
           }
 
           const finalRate = Math.max(0, Math.round(parsedRate));
-          return { date: dc.dateStr, rate: finalRate };
+          return { date: dc.dateStr, timestamp: dc.timestamp, rate: finalRate };
         });
 
         if (timeline.length > 0) {
@@ -257,7 +286,7 @@ export default function App() {
 
       const processed = processSheetData(json, file.name);
 
-      // FIXED CRASH: Using .concat() instead of spread operator for huge arrays
+      // CRASH FIX: Safe concatenation avoids "Call Stack Exceeded" crash on huge files
       allNewData = allNewData.concat(processed);
 
       setUploadProgress(((i + 1) / newFiles.length) * 100);
@@ -273,37 +302,31 @@ export default function App() {
     }, 500);
   };
 
-  // --- Base Evaluation Engine (Applies Date Filters so KPIs are accurate) ---
+  // --- Base Evaluation Engine (Applies ONLY Date Filters for accurate KPIs) ---
   const evaluatedStoresBase = useMemo(() => {
-    const parseAsLocal = (dStr) => {
-      if (dStr.includes("-") && !dStr.includes("T"))
-        return new Date(dStr + "T00:00:00");
-      return new Date(dStr);
-    };
+    // Calculate boundaries ONCE using high-speed timestamps
+    const startLimit = startDate
+      ? new Date(startDate + "T00:00:00").setHours(0, 0, 0, 0)
+      : null;
+    const endLimit = endDate
+      ? new Date(endDate + "T00:00:00").setHours(0, 0, 0, 0)
+      : null;
 
     return parsedData
       .map((store) => {
         let relevantTimeline = [];
         let baselineRate = null;
 
-        if (startDate || endDate) {
+        if (startLimit || endLimit) {
           for (let i = 0; i < store.timeline.length; i++) {
             const pt = store.timeline[i];
-            const d = parseAsLocal(pt.date);
-            d.setHours(0, 0, 0, 0);
+            const t = pt.timestamp;
 
-            const startLimit = startDate
-              ? parseAsLocal(startDate).setHours(0, 0, 0, 0)
-              : null;
-            const endLimit = endDate
-              ? parseAsLocal(endDate).setHours(0, 0, 0, 0)
-              : null;
-
-            if (startLimit && d < startLimit) {
+            if (startLimit && t < startLimit) {
               baselineRate = pt.rate;
               continue;
             }
-            if (endLimit && d > endLimit) {
+            if (endLimit && t > endLimit) {
               continue;
             }
             relevantTimeline.push(pt);
@@ -311,12 +334,13 @@ export default function App() {
 
           // Apply LOCF rate to the exact start date requested by the user
           if (
-            startDate &&
+            startLimit &&
             baselineRate !== null &&
             relevantTimeline.length > 0
           ) {
             relevantTimeline.unshift({
               date: startDate,
+              timestamp: startLimit,
               rate: baselineRate,
               isBaseline: true,
             });
@@ -339,12 +363,15 @@ export default function App() {
 
         const afterRate = relevantTimeline[relevantTimeline.length - 1].rate;
         let afterDate = relevantTimeline[relevantTimeline.length - 1].date;
+        let afterTimestamp =
+          relevantTimeline[relevantTimeline.length - 1].timestamp;
 
         let foundBefore = false;
         for (let i = 0; i < relevantTimeline.length; i++) {
           if (relevantTimeline[i].date === beforeDate) foundBefore = true;
           if (foundBefore && relevantTimeline[i].rate === afterRate) {
             afterDate = relevantTimeline[i].date;
+            afterTimestamp = relevantTimeline[i].timestamp;
             break;
           }
         }
@@ -367,6 +394,7 @@ export default function App() {
               ruleMatched = "Deflated to 0%";
               statusType = "won";
             } else if (B > 20 && A <= 20) {
+              // Fixed Logic: Any drop from >20 to <=20
               isClosedWon = true;
               ruleMatched = "Deflated to <= 20% (From >20%)";
               statusType = "won";
@@ -385,7 +413,7 @@ export default function App() {
             }
           }
         } else if (A > B) {
-          // Prices inflated, but mapped as "No Change" per requirements
+          // Prices inflated, marked simply as No Change per user requirement
           ruleMatched = "No Change";
           statusType = "neutral";
         }
@@ -401,6 +429,7 @@ export default function App() {
           beforeDate: displayBeforeDate,
           afterRate: A,
           afterDate: displayAfterDate,
+          afterTimestamp, // Used for lightning-fast table sorting
           isClosedWon,
           ruleMatched,
           statusType,
@@ -409,12 +438,12 @@ export default function App() {
       .filter(Boolean);
   }, [parsedData, startDate, endDate]);
 
-  // Total Wins Calculation (ignores checkboxes and searches so the KPI represents the true date frame)
+  // Total Wins KPI Calculation (Reacts to Date Filters, but ignores Checkboxes and Search)
   const totalWins = useMemo(() => {
     return evaluatedStoresBase.filter((s) => s.isClosedWon).length;
   }, [evaluatedStoresBase]);
 
-  // --- Display Engine (Applies Search, Sorting, and Checkboxes) ---
+  // --- Display Engine (Applies Search, Checkboxes, and Sorting) ---
   const displayStores = useMemo(() => {
     let processed = [...evaluatedStoresBase];
 
@@ -428,15 +457,10 @@ export default function App() {
     // Apply Checkbox Filters
     processed = processed.filter((s) => statusFilters[s.statusType]);
 
-    // Apply Sorting logic
+    // Apply High-Speed Sorting logic
     processed.sort((a, b) => {
-      const getTime = (dStr) => {
-        const t = new Date(dStr).getTime();
-        return isNaN(t) ? 0 : t;
-      };
-
-      const dateA = getTime(a.afterDate);
-      const dateB = getTime(b.afterDate);
+      const dateA = a.afterTimestamp || 0;
+      const dateB = b.afterTimestamp || 0;
       const dropA = a.beforeRate - a.afterRate;
       const dropB = b.beforeRate - b.afterRate;
 
@@ -461,6 +485,7 @@ export default function App() {
   const exportToExcel = () => {
     if (displayStores.length === 0 || !window.XLSX) return;
 
+    // Updated Headers to match requirements
     const wsData = [
       [
         "Which MSM team are you on?",
