@@ -56,7 +56,7 @@ export default function App() {
       document.head.appendChild(link);
     }
     link.href =
-      'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M23.13 9.47a3.8 3.8 0 0 0-3.79-3.8H9.72a1.35 1.35 0 0 0 0 2.7h9.62c.6 0 1.09.49 1.09 1.1 0 .6-.49 1.1-1.09 1.1H2.7A2.71 2.71 0 0 0 0 13.28v.17A2.71 2.71 0 0 0 2.7 16.16h16.64a3.8 3.8 0 0 0 3.79-3.8V9.47z" fill="%23eb1700"/></svg>';
+      'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">🎯</text></svg>';
     document.title = "MSM Markup Tracker";
 
     // Load Excel Engine
@@ -234,7 +234,7 @@ export default function App() {
 
     const newFiles = Array.from(uploadedFiles);
     setFiles((prev) => [...prev, ...newFiles]);
-    const allNewData = [];
+    let allNewData = [];
 
     for (let i = 0; i < newFiles.length; i++) {
       const file = newFiles[i];
@@ -256,13 +256,15 @@ export default function App() {
       });
 
       const processed = processSheetData(json, file.name);
-      allNewData.push(...processed);
+
+      // FIXED CRASH: Using .concat() instead of spread operator for huge arrays
+      allNewData = allNewData.concat(processed);
 
       setUploadProgress(((i + 1) / newFiles.length) * 100);
       await new Promise((r) => setTimeout(r, 20));
     }
 
-    setParsedData((prev) => [...prev, ...allNewData]);
+    setParsedData((prev) => prev.concat(allNewData));
 
     setTimeout(() => {
       setIsProcessing(false);
@@ -271,7 +273,7 @@ export default function App() {
     }, 500);
   };
 
-  // --- Base Evaluation Engine (Applies ONLY Date Filters for accurate KPIs) ---
+  // --- Base Evaluation Engine (Applies Date Filters so KPIs are accurate) ---
   const evaluatedStoresBase = useMemo(() => {
     const parseAsLocal = (dStr) => {
       if (dStr.includes("-") && !dStr.includes("T"))
@@ -320,7 +322,7 @@ export default function App() {
             });
           }
         } else {
-          relevantTimeline = [...store.timeline];
+          relevantTimeline = store.timeline;
         }
 
         if (relevantTimeline.length === 0) return null;
@@ -365,7 +367,6 @@ export default function App() {
               ruleMatched = "Deflated to 0%";
               statusType = "won";
             } else if (B > 20 && A <= 20) {
-              // Fixed logic: Drops from >20% to <=20%
               isClosedWon = true;
               ruleMatched = "Deflated to <= 20% (From >20%)";
               statusType = "won";
@@ -384,7 +385,7 @@ export default function App() {
             }
           }
         } else if (A > B) {
-          // Prices inflated, but we mark as No Change per requirements
+          // Prices inflated, but mapped as "No Change" per requirements
           ruleMatched = "No Change";
           statusType = "neutral";
         }
@@ -408,12 +409,12 @@ export default function App() {
       .filter(Boolean);
   }, [parsedData, startDate, endDate]);
 
-  // Total Wins Calculation (Reacts to Date Filters, but ignores checkboxes so KPI is stable)
+  // Total Wins Calculation (ignores checkboxes and searches so the KPI represents the true date frame)
   const totalWins = useMemo(() => {
     return evaluatedStoresBase.filter((s) => s.isClosedWon).length;
   }, [evaluatedStoresBase]);
 
-  // --- Display Engine (Applies Search, Checkboxes, and Sorting) ---
+  // --- Display Engine (Applies Search, Sorting, and Checkboxes) ---
   const displayStores = useMemo(() => {
     let processed = [...evaluatedStoresBase];
 
@@ -460,7 +461,6 @@ export default function App() {
   const exportToExcel = () => {
     if (displayStores.length === 0 || !window.XLSX) return;
 
-    // Updated Headers to match requirements
     const wsData = [
       [
         "Which MSM team are you on?",
@@ -480,8 +480,8 @@ export default function App() {
 
     displayStores.forEach((row) => {
       wsData.push([
-        "Concentrix", // Col 1: Hardcoded to Concentrix
-        row.sellerName, // Col 2: Extracted from file name using Regex
+        "Concentrix",
+        row.sellerName,
         row.storeId,
         row.type,
         row.beforeDate,
@@ -495,7 +495,7 @@ export default function App() {
             : "No Change",
         row.ruleMatched,
         row.filename,
-        row.type, // Last Col: Delivery or Pickup
+        row.type,
       ]);
     });
 
@@ -643,7 +643,7 @@ export default function App() {
                 <strong className="text-slate-700">Sigma Export (.xlsx)</strong>{" "}
                 files. Name your file using your name and type (e.g.{" "}
                 <span className="font-mono text-xs bg-slate-100 px-1 py-0.5 rounded">
-                  Mohamed Zeitoun - d.xlsx
+                  zeitoun muhammad -d.xlsx
                 </span>
                 ).
               </p>
@@ -792,7 +792,7 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-3 w-full xl:w-auto">
+                <div className="flex flex-wrap items-center gap-3 w-full xl:w-auto mt-2 xl:mt-0">
                   {/* Sorting Control */}
                   <div className="flex items-center bg-white border border-slate-300 rounded-lg px-2 py-1.5 focus-within:border-[#eb1700] transition-all">
                     <ArrowUpDown className="w-4 h-4 text-slate-400 ml-1 mr-2" />
