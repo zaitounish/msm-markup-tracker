@@ -17,6 +17,9 @@ import {
   ShieldAlert,
   Minus,
   ArrowUpDown,
+  Search,
+  CheckSquare,
+  Square,
 } from "lucide-react";
 
 export default function App() {
@@ -32,8 +35,15 @@ export default function App() {
   // Filter & Sort States
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
-  const [showOnlyWins, setShowOnlyWins] = useState(false);
   const [sortBy, setSortBy] = useState("date-desc");
+  const [searchTerm, setSearchTerm] = useState("");
+
+  // Checkbox Filters (Inflated removed completely)
+  const [statusFilters, setStatusFilters] = useState({
+    won: true,
+    natural: true,
+    neutral: false,
+  });
 
   const fileInputRef = useRef(null);
 
@@ -46,7 +56,7 @@ export default function App() {
       document.head.appendChild(link);
     }
     link.href =
-      'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">🎯</text></svg>';
+      'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M23.13 9.47a3.8 3.8 0 0 0-3.79-3.8H9.72a1.35 1.35 0 0 0 0 2.7h9.62c.6 0 1.09.49 1.09 1.1 0 .6-.49 1.1-1.09 1.1H2.7A2.71 2.71 0 0 0 0 13.28v.17A2.71 2.71 0 0 0 2.7 16.16h16.64a3.8 3.8 0 0 0 3.79-3.8V9.47z" fill="%23eb1700"/></svg>';
     document.title = "MSM Markup Tracker";
 
     // Load Excel Engine
@@ -62,11 +72,35 @@ export default function App() {
     document.body.appendChild(script);
   }, []);
 
-  // --- Core Parsing: Extracting Timeline ---
+  // --- Core Parsing & NLP Regex Engine ---
   const processSheetData = (json, filename) => {
     let type = "Unknown";
-    if (filename.toLowerCase().includes("del")) type = "Delivery";
-    if (filename.toLowerCase().includes("pick")) type = "Pickup";
+    let cleanName = filename.replace(/\.[^/.]+$/, ""); // Remove extension
+
+    // Regex to detect "-d", "/d", "|d", "- delivery", etc. at the end of the string
+    const deliveryRegex = /[\\/|_\-=.,\s]+(del(ivery)?|d)$/i;
+    const pickupRegex = /[\\/|_\-=.,\s]+(pick(up)?|p)$/i;
+
+    if (deliveryRegex.test(cleanName)) {
+      type = "Delivery";
+      cleanName = cleanName.replace(deliveryRegex, "");
+    } else if (pickupRegex.test(cleanName)) {
+      type = "Pickup";
+      cleanName = cleanName.replace(pickupRegex, "");
+    } else if (cleanName.toLowerCase().includes("del")) {
+      // Fallback
+      type = "Delivery";
+    } else if (cleanName.toLowerCase().includes("pick")) {
+      // Fallback
+      type = "Pickup";
+    }
+
+    // Clean up seller name by filtering out special characters
+    let sellerName = cleanName
+      .replace(/[-_/\\[\]()=|.,]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!sellerName) sellerName = "Unknown Rep";
 
     let headerRowIdx = -1;
     for (let i = 0; i < json.length; i++) {
@@ -83,6 +117,7 @@ export default function App() {
     if (headerRowIdx === -1) return [];
     const headers = json[headerRowIdx].map((h) => (h ? String(h).trim() : ""));
 
+    // We keep checking for "defilation" here so it still works on old typos in your CSVs
     const defDateIdx = headers.findIndex(
       (h) =>
         h.toLowerCase().includes("defilation date") ||
@@ -127,6 +162,7 @@ export default function App() {
         data.push({
           id: Math.random().toString(36).substr(2, 9),
           filename,
+          sellerName,
           type,
           storeId: String(storeId),
           timeline,
@@ -178,6 +214,7 @@ export default function App() {
           data.push({
             id: Math.random().toString(36).substr(2, 9),
             filename,
+            sellerName,
             type,
             storeId: String(storeId),
             timeline,
@@ -234,15 +271,15 @@ export default function App() {
     }, 500);
   };
 
-  // --- Rule Evaluation & Sorting Engine ---
-  const evaluatedStores = useMemo(() => {
+  // --- Base Evaluation Engine (Applies ONLY Date Filters for accurate KPIs) ---
+  const evaluatedStoresBase = useMemo(() => {
     const parseAsLocal = (dStr) => {
       if (dStr.includes("-") && !dStr.includes("T"))
         return new Date(dStr + "T00:00:00");
       return new Date(dStr);
     };
 
-    let processed = parsedData
+    return parsedData
       .map((store) => {
         let relevantTimeline = [];
         let baselineRate = null;
@@ -262,7 +299,6 @@ export default function App() {
 
             if (startLimit && d < startLimit) {
               baselineRate = pt.rate;
-              // Removed capturing baselineDate to stop the 1-day offset UI bug
               continue;
             }
             if (endLimit && d > endLimit) {
@@ -322,33 +358,35 @@ export default function App() {
           if (store.type === "Delivery") {
             if (B - A >= 5) {
               isClosedWon = true;
-              ruleMatched = "Defilated by 5%+";
+              ruleMatched = "Deflated by 5%+";
               statusType = "won";
             } else if (A === 0) {
               isClosedWon = true;
-              ruleMatched = "Defilated to 0%";
+              ruleMatched = "Deflated to 0%";
               statusType = "won";
-            } else if (B > 20 && A === 20) {
+            } else if (B > 20 && A <= 20) {
+              // Fixed logic: Drops from >20% to <=20%
               isClosedWon = true;
-              ruleMatched = "Defilated to exactly 20%";
+              ruleMatched = "Deflated to <= 20% (From >20%)";
               statusType = "won";
             } else {
-              ruleMatched = "Natural Defilation (Criteria not met)";
+              ruleMatched = "Natural Deflation (Criteria not met)";
               statusType = "natural";
             }
           } else if (store.type === "Pickup") {
             if (B > 1 && A === 0) {
               isClosedWon = true;
-              ruleMatched = "Defilated to 0% (From >1%)";
+              ruleMatched = "Deflated to 0% (From >1%)";
               statusType = "won";
             } else {
-              ruleMatched = "Natural Defilation (Criteria not met)";
+              ruleMatched = "Natural Deflation (Criteria not met)";
               statusType = "natural";
             }
           }
         } else if (A > B) {
-          ruleMatched = "Infilated (Prices increased)";
-          statusType = "inflated";
+          // Prices inflated, but we mark as No Change per requirements
+          ruleMatched = "No Change";
+          statusType = "neutral";
         }
 
         const displayBeforeDate = beforeDate.includes("1999")
@@ -368,10 +406,26 @@ export default function App() {
         };
       })
       .filter(Boolean);
+  }, [parsedData, startDate, endDate]);
 
-    if (showOnlyWins) {
-      processed = processed.filter((s) => s.isClosedWon);
+  // Total Wins Calculation (Reacts to Date Filters, but ignores checkboxes so KPI is stable)
+  const totalWins = useMemo(() => {
+    return evaluatedStoresBase.filter((s) => s.isClosedWon).length;
+  }, [evaluatedStoresBase]);
+
+  // --- Display Engine (Applies Search, Checkboxes, and Sorting) ---
+  const displayStores = useMemo(() => {
+    let processed = [...evaluatedStoresBase];
+
+    // Apply Search Filter
+    if (searchTerm) {
+      processed = processed.filter((s) =>
+        s.storeId.toLowerCase().includes(searchTerm.toLowerCase()),
+      );
     }
+
+    // Apply Checkbox Filters
+    processed = processed.filter((s) => statusFilters[s.statusType]);
 
     // Apply Sorting logic
     processed.sort((a, b) => {
@@ -400,18 +454,17 @@ export default function App() {
     });
 
     return processed;
-  }, [parsedData, startDate, endDate, showOnlyWins, sortBy]);
+  }, [evaluatedStoresBase, statusFilters, sortBy, searchTerm]);
 
-  const totalWins = useMemo(
-    () => evaluatedStores.filter((s) => s.isClosedWon).length,
-    [evaluatedStores],
-  );
-
+  // --- Export Excel Logic ---
   const exportToExcel = () => {
-    if (evaluatedStores.length === 0 || !window.XLSX) return;
+    if (displayStores.length === 0 || !window.XLSX) return;
 
+    // Updated Headers to match requirements
     const wsData = [
       [
+        "Which MSM team are you on?",
+        "Seller Name / Source",
         "Store ID",
         "Type",
         "Date (Before)",
@@ -421,11 +474,14 @@ export default function App() {
         "Status",
         "Rule Matched",
         "Source File",
+        "Inflation Type",
       ],
     ];
 
-    evaluatedStores.forEach((row) => {
+    displayStores.forEach((row) => {
       wsData.push([
+        "Concentrix", // Col 1: Hardcoded to Concentrix
+        row.sellerName, // Col 2: Extracted from file name using Regex
         row.storeId,
         row.type,
         row.beforeDate,
@@ -435,12 +491,11 @@ export default function App() {
         row.isClosedWon
           ? "Closed Won"
           : row.statusType === "natural"
-            ? "Natural Defilation"
-            : row.statusType === "inflated"
-              ? "Infilated"
-              : "No Change",
+            ? "Natural Deflation"
+            : "No Change",
         row.ruleMatched,
         row.filename,
+        row.type, // Last Col: Delivery or Pickup
       ]);
     });
 
@@ -449,7 +504,6 @@ export default function App() {
     window.XLSX.utils.book_append_sheet(wb, ws, "Markup Report");
 
     let filename = `Markup_Audit_Report_${new Date().toISOString().split("T")[0]}`;
-    if (showOnlyWins) filename += "_WINS_ONLY";
     filename += ".xlsx";
 
     window.XLSX.writeFile(wb, filename);
@@ -460,11 +514,25 @@ export default function App() {
     setParsedData([]);
     setStartDate("");
     setEndDate("");
+    setSearchTerm("");
   };
+
+  const toggleAllFilters = () => {
+    const allChecked =
+      statusFilters.won && statusFilters.natural && statusFilters.neutral;
+    setStatusFilters({
+      won: !allChecked,
+      natural: !allChecked,
+      neutral: !allChecked,
+    });
+  };
+
   const clearFilters = () => {
     setStartDate("");
     setEndDate("");
+    setSearchTerm("");
   };
+
   const onDragOver = (e) => {
     e.preventDefault();
     setIsDragging(true);
@@ -506,7 +574,7 @@ export default function App() {
               Processing Files...
             </h3>
             <p className="text-sm text-slate-500 mb-6">
-              Enforcing LOCF and timelines...
+              Parsing names, enforcing LOCF, and calculating rules...
             </p>
             <div className="w-full bg-slate-100 rounded-full h-3 mb-2 overflow-hidden">
               <div
@@ -546,7 +614,7 @@ export default function App() {
             </button>
             <button
               onClick={exportToExcel}
-              disabled={evaluatedStores.length === 0}
+              disabled={displayStores.length === 0}
               className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-[#eb1700] hover:bg-[#d11500] disabled:bg-slate-300 rounded-lg transition-colors shadow-sm"
             >
               <FileSpreadsheet className="w-4 h-4" /> Export Report
@@ -573,8 +641,11 @@ export default function App() {
               <p className="text-slate-500 mb-8 max-w-md mx-auto leading-relaxed">
                 Upload{" "}
                 <strong className="text-slate-700">Sigma Export (.xlsx)</strong>{" "}
-                files. We map the timeline, execute LOCF for blanks, and apply
-                the Playbook CW rules.
+                files. Name your file using your name and type (e.g.{" "}
+                <span className="font-mono text-xs bg-slate-100 px-1 py-0.5 rounded">
+                  Mohamed Zeitoun - d.xlsx
+                </span>
+                ).
               </p>
               <button
                 onClick={() => fileInputRef.current?.click()}
@@ -586,6 +657,7 @@ export default function App() {
           </div>
         ) : (
           <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            {/* KPI Cards */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-4">
                 <div className="bg-blue-50 p-4 rounded-xl text-blue-600">
@@ -606,7 +678,7 @@ export default function App() {
                 </div>
                 <div>
                   <p className="text-sm font-semibold text-slate-500">
-                    Closed Wons Confirmed
+                    Total Valid Wins
                   </p>
                   <p className="text-3xl font-bold text-slate-800">
                     {totalWins}
@@ -636,9 +708,70 @@ export default function App() {
               </div>
             </div>
 
+            {/* Checkbox Filter Ribbon */}
+            <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-4 flex flex-wrap items-center gap-4">
+              <button
+                onClick={toggleAllFilters}
+                className="text-sm font-semibold text-slate-500 hover:text-slate-800 transition-colors flex items-center gap-1.5 border-r border-slate-200 pr-4"
+              >
+                {statusFilters.won &&
+                statusFilters.natural &&
+                statusFilters.neutral ? (
+                  <CheckSquare className="w-4 h-4 text-slate-400" />
+                ) : (
+                  <Square className="w-4 h-4 text-slate-400" />
+                )}
+                Toggle All
+              </button>
+
+              <label className="flex items-center gap-2 cursor-pointer text-sm font-semibold text-green-700 bg-green-50 px-3 py-1.5 rounded-lg hover:bg-green-100 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={statusFilters.won}
+                  onChange={(e) =>
+                    setStatusFilters({
+                      ...statusFilters,
+                      won: e.target.checked,
+                    })
+                  }
+                  className="rounded text-green-600 focus:ring-green-500 w-4 h-4"
+                />
+                Closed Won
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer text-sm font-semibold text-amber-700 bg-amber-50 px-3 py-1.5 rounded-lg hover:bg-amber-100 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={statusFilters.natural}
+                  onChange={(e) =>
+                    setStatusFilters({
+                      ...statusFilters,
+                      natural: e.target.checked,
+                    })
+                  }
+                  className="rounded text-amber-600 focus:ring-amber-500 w-4 h-4"
+                />
+                Natural Deflation
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer text-sm font-semibold text-slate-700 bg-slate-100 px-3 py-1.5 rounded-lg hover:bg-slate-200 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={statusFilters.neutral}
+                  onChange={(e) =>
+                    setStatusFilters({
+                      ...statusFilters,
+                      neutral: e.target.checked,
+                    })
+                  }
+                  className="rounded text-slate-600 focus:ring-slate-500 w-4 h-4"
+                />
+                No Change
+              </label>
+            </div>
+
+            {/* Main Table Container */}
             <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden flex flex-col">
               <div className="px-6 py-4 border-b border-slate-200 bg-slate-50 flex flex-col xl:flex-row items-start xl:items-center justify-between gap-4">
-                <div className="flex items-center gap-4">
+                <div className="flex flex-wrap items-center gap-4">
                   <div className="flex items-center gap-2">
                     <Filter className="w-5 h-5 text-slate-400" />
                     <h2 className="text-lg font-bold text-slate-800">
@@ -646,20 +779,16 @@ export default function App() {
                     </h2>
                   </div>
 
-                  {/* View Toggle */}
-                  <div className="flex bg-slate-200/60 p-1 rounded-lg">
-                    <button
-                      onClick={() => setShowOnlyWins(false)}
-                      className={`px-3 py-1 text-sm font-semibold rounded-md transition-all ${!showOnlyWins ? "bg-white shadow-sm text-slate-800" : "text-slate-500 hover:text-slate-700"}`}
-                    >
-                      Show All
-                    </button>
-                    <button
-                      onClick={() => setShowOnlyWins(true)}
-                      className={`px-3 py-1 text-sm font-semibold rounded-md transition-all ${showOnlyWins ? "bg-white shadow-sm text-green-700" : "text-slate-500 hover:text-slate-700"}`}
-                    >
-                      Wins Only
-                    </button>
+                  {/* Search Bar */}
+                  <div className="flex items-center bg-white border border-slate-300 rounded-lg px-3 py-1.5 focus-within:border-[#eb1700] focus-within:ring-1 focus-within:ring-[#eb1700] transition-all">
+                    <Search className="w-4 h-4 text-slate-400 mr-2" />
+                    <input
+                      type="text"
+                      placeholder="Search Store ID..."
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                      className="text-sm text-slate-700 outline-none bg-transparent w-36"
+                    />
                   </div>
                 </div>
 
@@ -688,7 +817,7 @@ export default function App() {
                       value={startDate}
                       onChange={(e) => setStartDate(e.target.value)}
                       className="text-sm text-slate-700 outline-none bg-transparent"
-                      title="Filter by Defilation Date"
+                      title="Filter by Deflation Date"
                     />
                   </div>
                   <span className="text-slate-400 text-sm font-medium">to</span>
@@ -701,10 +830,11 @@ export default function App() {
                       className="text-sm text-slate-700 outline-none bg-transparent"
                     />
                   </div>
-                  {(startDate || endDate) && (
+                  {(startDate || endDate || searchTerm) && (
                     <button
                       onClick={clearFilters}
                       className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors"
+                      title="Clear Filters"
                     >
                       <XCircle className="w-5 h-5" />
                     </button>
@@ -734,7 +864,7 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {evaluatedStores.length === 0 ? (
+                    {displayStores.length === 0 ? (
                       <tr>
                         <td
                           colSpan="5"
@@ -742,12 +872,12 @@ export default function App() {
                         >
                           <CheckCircle2 className="w-16 h-16 mx-auto text-slate-200 mb-4" />
                           <p className="text-xl font-medium text-slate-700">
-                            No records found
+                            No records match filters
                           </p>
                         </td>
                       </tr>
                     ) : (
-                      evaluatedStores.map((row) => (
+                      displayStores.map((row) => (
                         <tr
                           key={row.id}
                           className="hover:bg-slate-50 transition-colors"
@@ -760,6 +890,12 @@ export default function App() {
                               className={`text-xs font-semibold mt-1 inline-block px-1.5 py-0.5 rounded ${row.type === "Delivery" ? "bg-purple-100 text-purple-700" : "bg-orange-100 text-orange-700"}`}
                             >
                               {row.type}
+                            </div>
+                            <div
+                              className="text-[10px] text-slate-400 mt-1 uppercase tracking-wider truncate max-w-[120px]"
+                              title={row.sellerName}
+                            >
+                              {row.sellerName}
                             </div>
                           </td>
                           <td className="px-6 py-4 bg-slate-50/30">
@@ -809,17 +945,12 @@ export default function App() {
                                 <ShieldAlert className="w-5 h-5 text-amber-500 mt-0.5 shrink-0" />
                                 <div>
                                   <div className="text-sm font-bold text-amber-700">
-                                    Natural Defilation
+                                    Natural Deflation
                                   </div>
                                   <div className="text-xs text-amber-600/80 font-medium">
                                     {row.ruleMatched}
                                   </div>
                                 </div>
-                              </div>
-                            )}
-                            {row.statusType === "inflated" && (
-                              <div className="text-sm font-medium text-red-500">
-                                {row.ruleMatched}
                               </div>
                             )}
                             {row.statusType === "neutral" && (
@@ -836,7 +967,7 @@ export default function App() {
               </div>
               <div className="px-6 py-3 border-t border-slate-200 bg-slate-50 text-right">
                 <p className="text-xs font-semibold text-slate-500">
-                  Showing {evaluatedStores.length} results
+                  Showing {displayStores.length} results
                 </p>
               </div>
             </div>
