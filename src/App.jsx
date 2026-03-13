@@ -233,8 +233,8 @@ export default function App() {
     const startLimit = startDate ? new Date(startDate + 'T00:00:00').setHours(0,0,0,0) : null;
     const endLimit = endDate ? new Date(endDate + 'T00:00:00').setHours(0,0,0,0) : null;
 
-    // Time-machine logic: If 30-Days filter is on, we look back 30 days automatically
-    const searchStart = (startLimit && statusFilters.thirtyDays) ? startLimit - thirtyDaysMs : startLimit;
+    // Fixed: Keep the evaluation window pure. Date logic for 30-day maturity is handled in the display logic.
+    const searchStart = startLimit;
 
     return parsedData.map(store => {
       let relevantTimeline = [];
@@ -360,7 +360,7 @@ export default function App() {
         statusType
       };
     }).filter(Boolean);
-  }, [parsedData, startDate, endDate, statusFilters.thirtyDays]);
+  }, [parsedData, startDate, endDate]); // Removed statusFilters.thirtyDays from dependency array
 
   // Total Wins KPI Calculation
   const totalWins = useMemo(() => {
