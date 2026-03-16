@@ -310,6 +310,7 @@ export default function App() {
       .map((store) => {
         let relevantTimeline = [];
         let baselineRate = null;
+        let baselineDate = null;
 
         if (searchStart || endLimit) {
           for (let i = 0; i < store.timeline.length; i++) {
@@ -318,6 +319,7 @@ export default function App() {
 
             if (searchStart && t < searchStart) {
               baselineRate = pt.rate;
+              baselineDate = pt.date; // Capture the real Excel date, preventing timezone shifts
               continue;
             }
             if (endLimit && t > endLimit) {
@@ -332,8 +334,8 @@ export default function App() {
             relevantTimeline.length > 0
           ) {
             relevantTimeline.unshift({
-              date: new Date(searchStart).toISOString().split("T")[0],
-              timestamp: searchStart,
+              date: baselineDate,
+              timestamp: searchStart - 1,
               rate: baselineRate,
               isBaseline: true,
             });
@@ -344,32 +346,35 @@ export default function App() {
 
         if (relevantTimeline.length === 0) return null;
 
-        // 1. Find the highest peak in the filtered timeline (Option B: Tight Snapshot using >= )
-        let beforeRate = -1;
-        let beforeDate = relevantTimeline[0].date;
-        let beforeIndex = 0;
-
-        for (let i = 0; i < relevantTimeline.length; i++) {
-          // >= ensures we lock onto the LAST day it was at the peak rate before the drop
-          if (relevantTimeline[i].rate >= beforeRate) {
-            beforeRate = relevantTimeline[i].rate;
-            beforeDate = relevantTimeline[i].date;
-            beforeIndex = i;
-          }
-        }
-
-        // 2. Determine the latest settled bottom (handles Multi-Step Drops)
-        const afterRate = relevantTimeline[relevantTimeline.length - 1].rate;
+        // 1. Find the latest settled bottom (After Date) by walking backward
+        const finalRate = relevantTimeline[relevantTimeline.length - 1].rate;
+        let afterRate = finalRate;
         let afterDate = relevantTimeline[relevantTimeline.length - 1].date;
         let afterTimestamp =
           relevantTimeline[relevantTimeline.length - 1].timestamp;
+        let afterIndex = relevantTimeline.length - 1;
 
-        // 3. Find the EXACT FIRST DAY it hit that afterRate AFTER the beforeDate peak
-        for (let i = beforeIndex + 1; i < relevantTimeline.length; i++) {
-          if (relevantTimeline[i].rate === afterRate) {
-            afterDate = relevantTimeline[i].date;
-            afterTimestamp = relevantTimeline[i].timestamp;
-            break; // Lock the timestamp exactly onto the day the drop hit the floor
+        for (let i = relevantTimeline.length - 1; i >= 0; i--) {
+          if (relevantTimeline[i].rate !== finalRate) {
+            break; // The rate changed, locking the After Date perfectly
+          }
+          afterRate = relevantTimeline[i].rate;
+          afterDate = relevantTimeline[i].date;
+          afterTimestamp = relevantTimeline[i].timestamp;
+          afterIndex = i;
+        }
+
+        // 2. Find the Highest Peak strictly BEFORE the After Date
+        let beforeRate = relevantTimeline[0].rate;
+        let beforeDate = relevantTimeline[0].date;
+
+        if (afterIndex > 0) {
+          beforeRate = -1;
+          for (let i = 0; i < afterIndex; i++) {
+            if (relevantTimeline[i].rate >= beforeRate) {
+              beforeRate = relevantTimeline[i].rate;
+              beforeDate = relevantTimeline[i].date;
+            }
           }
         }
 
@@ -440,10 +445,10 @@ export default function App() {
           statusType = "neutral";
         }
 
-        const displayBeforeDate = beforeDate.includes("1999")
-          ? "N/A"
-          : beforeDate;
-        const displayAfterDate = afterDate.includes("2000") ? "N/A" : afterDate;
+        const displayBeforeDate =
+          beforeDate && beforeDate.includes("1999") ? "N/A" : beforeDate;
+        const displayAfterDate =
+          afterDate && afterDate.includes("2000") ? "N/A" : afterDate;
 
         return {
           ...store,
