@@ -301,29 +301,32 @@ export default function App() {
         if (relevantTimeline.length === 0) return null;
 
         // =========================================================================
-        // ENGINE A: STANDARD CLOSED WON LOGIC (Backward Scan - Option B)
+        // ENGINE A: STANDARD CLOSED WON LOGIC (Backward Scan - Option C for Display)
         // =========================================================================
         const finalRate = relevantTimeline[relevantTimeline.length - 1].rate;
         let cwAfterRate = finalRate;
-        let cwAfterDate = relevantTimeline[relevantTimeline.length - 1].date;
-        let cwAfterTimestamp =
+
+        // Option C: Grab the very last date in the filtered timeline for the DISPLAY date
+        let cwAfterDateOptionC =
+          relevantTimeline[relevantTimeline.length - 1].date;
+
+        // We still need the exact drop point (Option B) for accurate date filtering/sorting
+        let cwDropTimestamp =
           relevantTimeline[relevantTimeline.length - 1].timestamp;
-        let cwAfterIndex = relevantTimeline.length - 1;
+        let cwDropIndex = relevantTimeline.length - 1;
 
         for (let i = relevantTimeline.length - 1; i >= 0; i--) {
           if (relevantTimeline[i].rate !== finalRate) break;
-          cwAfterRate = relevantTimeline[i].rate;
-          cwAfterDate = relevantTimeline[i].date;
-          cwAfterTimestamp = relevantTimeline[i].timestamp;
-          cwAfterIndex = i;
+          cwDropTimestamp = relevantTimeline[i].timestamp;
+          cwDropIndex = i;
         }
 
         let cwBeforeRate = relevantTimeline[0].rate;
         let cwBeforeDate = relevantTimeline[0].date;
 
-        if (cwAfterIndex > 0) {
+        if (cwDropIndex > 0) {
           cwBeforeRate = -1;
-          for (let i = 0; i < cwAfterIndex; i++) {
+          for (let i = 0; i < cwDropIndex; i++) {
             if (relevantTimeline[i].rate >= cwBeforeRate) {
               cwBeforeRate = relevantTimeline[i].rate;
               cwBeforeDate = relevantTimeline[i].date;
@@ -456,7 +459,7 @@ export default function App() {
 
         return {
           ...store,
-          // Engine A: Standard Data
+          // Engine A: Standard Data (Using Option C for the display date)
           cwBeforeRate: cwBeforeRate,
           cwBeforeDate:
             cwBeforeDate && cwBeforeDate.includes("1999")
@@ -464,8 +467,10 @@ export default function App() {
               : cwBeforeDate,
           cwAfterRate: cwAfterRate,
           cwAfterDate:
-            cwAfterDate && cwAfterDate.includes("2000") ? "N/A" : cwAfterDate,
-          cwAfterTimestamp: cwAfterTimestamp,
+            cwAfterDateOptionC && cwAfterDateOptionC.includes("2000")
+              ? "N/A"
+              : cwAfterDateOptionC,
+          cwAfterTimestamp: cwDropTimestamp, // Keeps accurate filter logic tied strictly to the exact drop date
           cwIsClosedWon,
           cwRuleMatched,
           cwStatusType,
