@@ -865,7 +865,7 @@ export default function App() {
                 <strong className="text-slate-700">Sigma Export (.xlsx)</strong>{" "}
                 files. Name your file using your name and type (e.g.{" "}
                 <span className="font-mono text-xs bg-slate-100 px-1 py-0.5 rounded">
-                  zeitoun muhammad -d.xlsx
+                  Mohamed Zeitoun-d.xlsx
                 </span>
                 ).
               </p>
