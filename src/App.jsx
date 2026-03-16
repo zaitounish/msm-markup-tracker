@@ -247,6 +247,263 @@ export default function App() {
     return data;
   };
 
+  // --- Base Evaluation Engine (Now with TWO separate engines) ---
+  const evaluatedStoresBase = useMemo(() => {
+    const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
+    const startLimit = startDate
+      ? new Date(startDate + "T00:00:00").setHours(0, 0, 0, 0)
+      : null;
+    const endLimit = endDate
+      ? new Date(endDate + "T00:00:00").setHours(0, 0, 0, 0)
+      : null;
+
+    const searchStart = startLimit;
+
+    return parsedData
+      .map((store) => {
+        let relevantTimeline = [];
+        let baselineRate = null;
+        let baselineDate = null;
+
+        // 1. Establish the Timeline based on UI Filters
+        if (searchStart || endLimit) {
+          for (let i = 0; i < store.timeline.length; i++) {
+            const pt = store.timeline[i];
+            const t = pt.timestamp;
+
+            if (searchStart && t < searchStart) {
+              baselineRate = pt.rate;
+              baselineDate = pt.date;
+              continue;
+            }
+            if (endLimit && t > endLimit) {
+              continue;
+            }
+            relevantTimeline.push(pt);
+          }
+
+          if (
+            searchStart &&
+            baselineRate !== null &&
+            relevantTimeline.length > 0
+          ) {
+            relevantTimeline.unshift({
+              date: baselineDate,
+              timestamp: searchStart - 1,
+              rate: baselineRate,
+              isBaseline: true,
+            });
+          }
+        } else {
+          relevantTimeline = store.timeline;
+        }
+
+        if (relevantTimeline.length === 0) return null;
+
+        // =========================================================================
+        // ENGINE A: STANDARD CLOSED WON LOGIC (Backward Scan - Option B)
+        // =========================================================================
+        const finalRate = relevantTimeline[relevantTimeline.length - 1].rate;
+        let cwAfterRate = finalRate;
+        let cwAfterDate = relevantTimeline[relevantTimeline.length - 1].date;
+        let cwAfterTimestamp =
+          relevantTimeline[relevantTimeline.length - 1].timestamp;
+        let cwAfterIndex = relevantTimeline.length - 1;
+
+        for (let i = relevantTimeline.length - 1; i >= 0; i--) {
+          if (relevantTimeline[i].rate !== finalRate) break;
+          cwAfterRate = relevantTimeline[i].rate;
+          cwAfterDate = relevantTimeline[i].date;
+          cwAfterTimestamp = relevantTimeline[i].timestamp;
+          cwAfterIndex = i;
+        }
+
+        let cwBeforeRate = relevantTimeline[0].rate;
+        let cwBeforeDate = relevantTimeline[0].date;
+
+        if (cwAfterIndex > 0) {
+          cwBeforeRate = -1;
+          for (let i = 0; i < cwAfterIndex; i++) {
+            if (relevantTimeline[i].rate >= cwBeforeRate) {
+              cwBeforeRate = relevantTimeline[i].rate;
+              cwBeforeDate = relevantTimeline[i].date;
+            }
+          }
+        }
+
+        let cwIsClosedWon = false;
+        let cwRuleMatched = "No Change";
+        let cwStatusType = "neutral";
+        const B = cwBeforeRate;
+        const A = cwAfterRate;
+
+        if (B > A) {
+          if (store.type === "Delivery") {
+            if (B - A >= 5) {
+              cwIsClosedWon = true;
+              cwRuleMatched = "Deflated by 5%+";
+              cwStatusType = "won";
+            } else if (A === 0) {
+              cwIsClosedWon = true;
+              cwRuleMatched = "Deflated to 0%";
+              cwStatusType = "won";
+            } else if (B > 20 && A <= 20) {
+              cwIsClosedWon = true;
+              cwRuleMatched = "Deflated to <= 20% (From >20%)";
+              cwStatusType = "won";
+            } else {
+              cwRuleMatched = "Natural Deflation (Criteria not met)";
+              cwStatusType = "natural";
+            }
+          } else if (store.type === "Pickup") {
+            if (B > 1 && A === 0) {
+              cwIsClosedWon = true;
+              cwRuleMatched = "Deflated to 0% (From >1%)";
+              cwStatusType = "won";
+            } else {
+              cwRuleMatched = "Natural Deflation (Criteria not met)";
+              cwStatusType = "natural";
+            }
+          }
+        } else if (A > B) {
+          cwRuleMatched = "No Change";
+          cwStatusType = "neutral";
+        }
+
+        // =========================================================================
+        // ENGINE B: MAINTAINED 30 DAYS LOGIC (Forward Scan - Option C)
+        // =========================================================================
+        let m30PeakRate = -1;
+        let m30PeakDate = null;
+        let m30DropRate = null;
+        let m30DropTimestamp = null;
+        let m30RuleMatched = "No Change";
+
+        // Forward scan to find the VERY FIRST qualifying drop
+        for (let i = 0; i < relevantTimeline.length; i++) {
+          const current = relevantTimeline[i];
+
+          if (!m30DropTimestamp) {
+            if (current.rate >= m30PeakRate) {
+              m30PeakRate = current.rate;
+              m30PeakDate = current.date;
+            }
+
+            let isValidDrop = false;
+            if (store.type === "Delivery") {
+              if (
+                m30PeakRate - current.rate >= 5 ||
+                current.rate === 0 ||
+                (m30PeakRate > 20 && current.rate <= 20)
+              ) {
+                isValidDrop = true;
+              }
+            } else if (store.type === "Pickup") {
+              if (m30PeakRate > 1 && current.rate === 0) {
+                isValidDrop = true;
+              }
+            }
+
+            if (isValidDrop) {
+              m30DropRate = current.rate;
+              m30DropTimestamp = current.timestamp;
+
+              if (store.type === "Delivery") {
+                if (m30PeakRate - current.rate >= 5)
+                  m30RuleMatched = "Deflated by 5%+";
+                else if (current.rate === 0) m30RuleMatched = "Deflated to 0%";
+                else m30RuleMatched = "Deflated to <= 20% (From >20%)";
+              } else {
+                m30RuleMatched = "Deflated to 0% (From >1%)";
+              }
+              break; // Stop looking! We only care about the FIRST win for 30 Days.
+            }
+          }
+        }
+
+        let m30HeldFor30Days = false;
+        let m30AfterDateOptionC = null;
+
+        if (m30DropTimestamp !== null) {
+          m30HeldFor30Days = true;
+          let foundSufficientData = false;
+
+          // Scan the FULL global timeline to verify 30-day maturity
+          for (let i = 0; i < store.timeline.length; i++) {
+            const t = store.timeline[i].timestamp;
+            if (t > m30DropTimestamp && t <= m30DropTimestamp + thirtyDaysMs) {
+              if (store.timeline[i].rate > m30DropRate) {
+                m30HeldFor30Days = false; // It didn't hold!
+                break;
+              }
+            }
+            if (t >= m30DropTimestamp + thirtyDaysMs) {
+              foundSufficientData = true;
+            }
+          }
+
+          if (!foundSufficientData) {
+            const latestT = store.timeline[store.timeline.length - 1].timestamp;
+            if (latestT < m30DropTimestamp + thirtyDaysMs) {
+              m30HeldFor30Days = false;
+            }
+          }
+
+          // Option C logic: Grab the very last date in the filtered timeline
+          m30AfterDateOptionC =
+            relevantTimeline[relevantTimeline.length - 1].date;
+        }
+
+        return {
+          ...store,
+          // Engine A: Standard Data
+          cwBeforeRate: cwBeforeRate,
+          cwBeforeDate:
+            cwBeforeDate && cwBeforeDate.includes("1999")
+              ? "N/A"
+              : cwBeforeDate,
+          cwAfterRate: cwAfterRate,
+          cwAfterDate:
+            cwAfterDate && cwAfterDate.includes("2000") ? "N/A" : cwAfterDate,
+          cwAfterTimestamp: cwAfterTimestamp,
+          cwIsClosedWon,
+          cwRuleMatched,
+          cwStatusType,
+
+          // Engine B: Maintained 30 Days Data
+          m30BeforeRate: m30PeakRate,
+          m30BeforeDate:
+            m30PeakDate && m30PeakDate.includes("1999") ? "N/A" : m30PeakDate,
+          m30AfterRate: m30DropRate,
+          m30AfterDate:
+            m30AfterDateOptionC && m30AfterDateOptionC.includes("2000")
+              ? "N/A"
+              : m30AfterDateOptionC,
+          m30Timestamp: m30DropTimestamp,
+          m30HeldFor30Days,
+          m30RuleMatched,
+        };
+      })
+      .filter(Boolean);
+  }, [parsedData, startDate, endDate]);
+
+  // Total Wins KPI Calculation (Uses Standard Engine A)
+  const totalWins = useMemo(() => {
+    const startLimit = startDate
+      ? new Date(startDate + "T00:00:00").setHours(0, 0, 0, 0)
+      : null;
+    const endLimit = endDate
+      ? new Date(endDate + "T00:00:00").setHours(0, 0, 0, 0)
+      : null;
+
+    return evaluatedStoresBase.filter((s) => {
+      const dropDateValid =
+        (!startLimit || s.cwAfterTimestamp >= startLimit) &&
+        (!endLimit || s.cwAfterTimestamp <= endLimit);
+      return s.cwIsClosedWon && dropDateValid;
+    }).length;
+  }, [evaluatedStoresBase, startDate, endDate]);
+
   const handleFileUpload = async (uploadedFiles) => {
     if (!window.XLSX)
       return alert("Excel engine is still loading. Please wait a second.");
@@ -294,199 +551,8 @@ export default function App() {
     }, 500);
   };
 
-  // --- Base Evaluation Engine (Extracts core logic & 30-day holds) ---
-  const evaluatedStoresBase = useMemo(() => {
-    const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
-    const startLimit = startDate
-      ? new Date(startDate + "T00:00:00").setHours(0, 0, 0, 0)
-      : null;
-    const endLimit = endDate
-      ? new Date(endDate + "T00:00:00").setHours(0, 0, 0, 0)
-      : null;
-
-    const searchStart = startLimit;
-
-    return parsedData
-      .map((store) => {
-        let relevantTimeline = [];
-        let baselineRate = null;
-        let baselineDate = null;
-
-        if (searchStart || endLimit) {
-          for (let i = 0; i < store.timeline.length; i++) {
-            const pt = store.timeline[i];
-            const t = pt.timestamp;
-
-            if (searchStart && t < searchStart) {
-              baselineRate = pt.rate;
-              baselineDate = pt.date; // Capture the real Excel date, preventing timezone shifts
-              continue;
-            }
-            if (endLimit && t > endLimit) {
-              continue;
-            }
-            relevantTimeline.push(pt);
-          }
-
-          if (
-            searchStart &&
-            baselineRate !== null &&
-            relevantTimeline.length > 0
-          ) {
-            relevantTimeline.unshift({
-              date: baselineDate,
-              timestamp: searchStart - 1,
-              rate: baselineRate,
-              isBaseline: true,
-            });
-          }
-        } else {
-          relevantTimeline = store.timeline;
-        }
-
-        if (relevantTimeline.length === 0) return null;
-
-        // 1. Find the latest settled bottom (After Date) by walking backward
-        const finalRate = relevantTimeline[relevantTimeline.length - 1].rate;
-        let afterRate = finalRate;
-        let afterDate = relevantTimeline[relevantTimeline.length - 1].date;
-        let afterTimestamp =
-          relevantTimeline[relevantTimeline.length - 1].timestamp;
-        let afterIndex = relevantTimeline.length - 1;
-
-        for (let i = relevantTimeline.length - 1; i >= 0; i--) {
-          if (relevantTimeline[i].rate !== finalRate) {
-            break; // The rate changed, locking the After Date perfectly
-          }
-          afterRate = relevantTimeline[i].rate;
-          afterDate = relevantTimeline[i].date;
-          afterTimestamp = relevantTimeline[i].timestamp;
-          afterIndex = i;
-        }
-
-        // 2. Find the Highest Peak strictly BEFORE the After Date
-        let beforeRate = relevantTimeline[0].rate;
-        let beforeDate = relevantTimeline[0].date;
-
-        if (afterIndex > 0) {
-          beforeRate = -1;
-          for (let i = 0; i < afterIndex; i++) {
-            if (relevantTimeline[i].rate >= beforeRate) {
-              beforeRate = relevantTimeline[i].rate;
-              beforeDate = relevantTimeline[i].date;
-            }
-          }
-        }
-
-        // Check the 30-Day Holding Rule
-        let heldFor30Days = false;
-        if (afterTimestamp) {
-          heldFor30Days = true;
-          let foundSufficientData = false;
-
-          for (let i = 0; i < store.timeline.length; i++) {
-            const t = store.timeline[i].timestamp;
-            if (t > afterTimestamp && t <= afterTimestamp + thirtyDaysMs) {
-              if (store.timeline[i].rate > afterRate) {
-                heldFor30Days = false; // It didn't hold!
-                break;
-              }
-            }
-            if (t >= afterTimestamp + thirtyDaysMs) {
-              foundSufficientData = true;
-            }
-          }
-
-          if (!foundSufficientData) {
-            const latestT = store.timeline[store.timeline.length - 1].timestamp;
-            if (latestT < afterTimestamp + thirtyDaysMs) {
-              heldFor30Days = false; // File ends before 30 days passes
-            }
-          }
-        }
-
-        // Evaluate DoorDash Rules
-        const B = beforeRate;
-        const A = afterRate;
-        let isClosedWon = false;
-        let ruleMatched = "No Change";
-        let statusType = "neutral";
-
-        if (B > A) {
-          if (store.type === "Delivery") {
-            if (B - A >= 5) {
-              isClosedWon = true;
-              ruleMatched = "Deflated by 5%+";
-              statusType = "won";
-            } else if (A === 0) {
-              isClosedWon = true;
-              ruleMatched = "Deflated to 0%";
-              statusType = "won";
-            } else if (B > 20 && A <= 20) {
-              isClosedWon = true;
-              ruleMatched = "Deflated to <= 20% (From >20%)";
-              statusType = "won";
-            } else {
-              ruleMatched = "Natural Deflation (Criteria not met)";
-              statusType = "natural";
-            }
-          } else if (store.type === "Pickup") {
-            if (B > 1 && A === 0) {
-              isClosedWon = true;
-              ruleMatched = "Deflated to 0% (From >1%)";
-              statusType = "won";
-            } else {
-              ruleMatched = "Natural Deflation (Criteria not met)";
-              statusType = "natural";
-            }
-          }
-        } else if (A > B) {
-          ruleMatched = "No Change";
-          statusType = "neutral";
-        }
-
-        const displayBeforeDate =
-          beforeDate && beforeDate.includes("1999") ? "N/A" : beforeDate;
-        const displayAfterDate =
-          afterDate && afterDate.includes("2000") ? "N/A" : afterDate;
-
-        return {
-          ...store,
-          beforeRate: B,
-          beforeDate: displayBeforeDate,
-          afterRate: A,
-          afterDate: displayAfterDate,
-          afterTimestamp,
-          isClosedWon,
-          heldFor30Days,
-          ruleMatched,
-          statusType,
-        };
-      })
-      .filter(Boolean);
-  }, [parsedData, startDate, endDate]);
-
-  // Total Wins KPI Calculation
-  const totalWins = useMemo(() => {
-    const startLimit = startDate
-      ? new Date(startDate + "T00:00:00").setHours(0, 0, 0, 0)
-      : null;
-    const endLimit = endDate
-      ? new Date(endDate + "T00:00:00").setHours(0, 0, 0, 0)
-      : null;
-
-    return evaluatedStoresBase.filter((s) => {
-      // Normal Closed Won Date Check
-      const dropDateValid =
-        (!startLimit || s.afterTimestamp >= startLimit) &&
-        (!endLimit || s.afterTimestamp <= endLimit);
-      return s.isClosedWon && dropDateValid;
-    }).length;
-  }, [evaluatedStoresBase, startDate, endDate]);
-
-  // --- Display Engine (Prioritizes Checkboxes and Date Combinations) ---
+  // --- Display Engine (Combines Engines based on Checkboxes) ---
   const displayStores = useMemo(() => {
-    const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
     const startLimit = startDate
       ? new Date(startDate + "T00:00:00").setHours(0, 0, 0, 0)
       : null;
@@ -496,45 +562,76 @@ export default function App() {
 
     let processed = evaluatedStoresBase
       .map((s) => {
-        // Date Check 1: Normal Drop
-        let dropDateValid =
-          (!startLimit || s.afterTimestamp >= startLimit) &&
-          (!endLimit || s.afterTimestamp <= endLimit);
-        // Date Check 2: 30-Day Maturity
-        let matureDateValid =
-          (!startLimit || s.afterTimestamp + thirtyDaysMs >= startLimit) &&
-          (!endLimit || s.afterTimestamp + thirtyDaysMs <= endLimit);
-
         let activeStatus = null;
-        let displayRule = s.ruleMatched;
+        let displayRule = "";
+        let displayBeforeRate,
+          displayBeforeDate,
+          displayAfterRate,
+          displayAfterDate;
+
+        // Date Check Filter logic
+        let cwDropDateValid =
+          (!startLimit || s.cwAfterTimestamp >= startLimit) &&
+          (!endLimit || s.cwAfterTimestamp <= endLimit);
+        let m30DropDateValid =
+          (!startLimit || s.m30Timestamp >= startLimit) &&
+          (!endLimit || s.m30Timestamp <= endLimit);
 
         // Cascade Priority Logic
         if (
           statusFilters.thirtyDays &&
-          s.isClosedWon &&
-          s.heldFor30Days &&
-          matureDateValid
+          s.m30HeldFor30Days &&
+          m30DropDateValid
         ) {
           activeStatus = "thirtyDays";
-          displayRule = "Maintained 30+ Days: " + s.ruleMatched;
-        } else if (statusFilters.won && s.isClosedWon && dropDateValid) {
+          displayRule = "Maintained 30+ Days: " + s.m30RuleMatched;
+          displayBeforeRate = s.m30BeforeRate;
+          displayBeforeDate = s.m30BeforeDate;
+          displayAfterRate = s.m30AfterRate;
+          displayAfterDate = s.m30AfterDate;
+        } else if (statusFilters.won && s.cwIsClosedWon && cwDropDateValid) {
           activeStatus = "won";
+          displayRule = s.cwRuleMatched;
+          displayBeforeRate = s.cwBeforeRate;
+          displayBeforeDate = s.cwBeforeDate;
+          displayAfterRate = s.cwAfterRate;
+          displayAfterDate = s.cwAfterDate;
         } else if (
           statusFilters.natural &&
-          s.statusType === "natural" &&
-          dropDateValid
+          s.cwStatusType === "natural" &&
+          cwDropDateValid
         ) {
           activeStatus = "natural";
+          displayRule = s.cwRuleMatched;
+          displayBeforeRate = s.cwBeforeRate;
+          displayBeforeDate = s.cwBeforeDate;
+          displayAfterRate = s.cwAfterRate;
+          displayAfterDate = s.cwAfterDate;
         } else if (
           statusFilters.neutral &&
-          s.statusType === "neutral" &&
-          dropDateValid
+          s.cwStatusType === "neutral" &&
+          cwDropDateValid
         ) {
           activeStatus = "neutral";
+          displayRule = s.cwRuleMatched;
+          displayBeforeRate = s.cwBeforeRate;
+          displayBeforeDate = s.cwBeforeDate;
+          displayAfterRate = s.cwAfterRate;
+          displayAfterDate = s.cwAfterDate;
         }
 
         if (!activeStatus) return null;
-        return { ...s, activeStatus, ruleMatched: displayRule };
+        return {
+          ...s,
+          activeStatus,
+          ruleMatched: displayRule,
+          displayBeforeRate,
+          displayBeforeDate,
+          displayAfterRate,
+          displayAfterDate,
+          sortTimestamp:
+            activeStatus === "thirtyDays" ? s.m30Timestamp : s.cwAfterTimestamp,
+        };
       })
       .filter(Boolean);
 
@@ -547,10 +644,10 @@ export default function App() {
 
     // Apply Sorting logic
     processed.sort((a, b) => {
-      const dateA = a.afterTimestamp || 0;
-      const dateB = b.afterTimestamp || 0;
-      const dropA = a.beforeRate - a.afterRate;
-      const dropB = b.beforeRate - b.afterRate;
+      const dateA = a.sortTimestamp || 0;
+      const dateB = b.sortTimestamp || 0;
+      const dropA = a.displayBeforeRate - a.displayAfterRate;
+      const dropB = b.displayBeforeRate - b.displayAfterRate;
 
       switch (sortBy) {
         case "date-desc":
@@ -603,10 +700,10 @@ export default function App() {
         row.sellerName,
         row.storeId,
         row.type,
-        row.beforeDate,
-        `${row.beforeRate}%`,
-        row.afterDate,
-        `${row.afterRate}%`,
+        row.displayBeforeDate,
+        `${row.displayBeforeRate}%`,
+        row.displayAfterDate,
+        `${row.displayAfterRate}%`,
         row.activeStatus === "thirtyDays"
           ? "Maintained 30 Days"
           : row.activeStatus === "won"
@@ -1040,18 +1137,18 @@ export default function App() {
                           </td>
                           <td className="px-6 py-4 bg-slate-50/30">
                             <div className="text-lg font-bold text-slate-700">
-                              {row.beforeRate}%
+                              {row.displayBeforeRate}%
                             </div>
                             <div className="text-xs text-slate-500 flex items-center gap-1 mt-1">
                               <Calendar className="w-3 h-3" /> Date:{" "}
-                              {row.beforeDate}
+                              {row.displayBeforeDate}
                             </div>
                           </td>
                           <td className="px-4 py-4 text-center">
-                            {row.beforeRate > row.afterRate ? (
+                            {row.displayBeforeRate > row.displayAfterRate ? (
                               <TrendingDown
                                 className="w-5 h-5 text-green-500 mx-auto"
-                                title={`Drop of ${row.beforeRate - row.afterRate}%`}
+                                title={`Drop of ${row.displayBeforeRate - row.displayAfterRate}%`}
                               />
                             ) : (
                               <Minus className="w-5 h-5 text-slate-300 mx-auto" />
@@ -1059,11 +1156,11 @@ export default function App() {
                           </td>
                           <td className="px-6 py-4 bg-slate-50/30">
                             <div className="text-lg font-bold text-slate-700">
-                              {row.afterRate}%
+                              {row.displayAfterRate}%
                             </div>
                             <div className="text-xs text-slate-500 flex items-center gap-1 mt-1">
                               <Calendar className="w-3 h-3" /> Date:{" "}
-                              {row.afterDate}
+                              {row.displayAfterDate}
                             </div>
                           </td>
                           <td className="px-6 py-4">
