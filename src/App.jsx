@@ -301,16 +301,12 @@ export default function App() {
         if (relevantTimeline.length === 0) return null;
 
         // =========================================================================
-        // ENGINE A: STANDARD CLOSED WON LOGIC (Backward Scan - Option C for Display)
+        // ENGINE A: STANDARD CLOSED WON LOGIC (Backward Scan - Option B for Display)
         // =========================================================================
         const finalRate = relevantTimeline[relevantTimeline.length - 1].rate;
         let cwAfterRate = finalRate;
 
-        // Option C: Grab the very last date in the filtered timeline for the DISPLAY date
-        let cwAfterDateOptionC =
-          relevantTimeline[relevantTimeline.length - 1].date;
-
-        // We still need the exact drop point (Option B) for accurate date filtering/sorting
+        // We find the exact drop point (Option B) for accurate date filtering/sorting AND display
         let cwDropTimestamp =
           relevantTimeline[relevantTimeline.length - 1].timestamp;
         let cwDropIndex = relevantTimeline.length - 1;
@@ -321,9 +317,14 @@ export default function App() {
           cwDropIndex = i;
         }
 
+        // Option B: Grab the exact date the new low rate started for the DISPLAY date
+        let cwAfterDateOptionB = relevantTimeline[cwDropIndex].date;
+
         let cwBeforeRate = relevantTimeline[0].rate;
         let cwBeforeDate = relevantTimeline[0].date;
 
+        // To get the tightest window (Option B) for the Before Date, we look at the peak rate right before the drop.
+        // The >= ensures we grab the latest possible date (e.g. Feb 9 instead of Feb 1) if the rate was flat.
         if (cwDropIndex > 0) {
           cwBeforeRate = -1;
           for (let i = 0; i < cwDropIndex; i++) {
@@ -459,7 +460,7 @@ export default function App() {
 
         return {
           ...store,
-          // Engine A: Standard Data (Using Option C for the display date)
+          // Engine A: Standard Data (Using Option B for the display date)
           cwBeforeRate: cwBeforeRate,
           cwBeforeDate:
             cwBeforeDate && cwBeforeDate.includes("1999")
@@ -467,9 +468,9 @@ export default function App() {
               : cwBeforeDate,
           cwAfterRate: cwAfterRate,
           cwAfterDate:
-            cwAfterDateOptionC && cwAfterDateOptionC.includes("2000")
+            cwAfterDateOptionB && cwAfterDateOptionB.includes("2000")
               ? "N/A"
-              : cwAfterDateOptionC,
+              : cwAfterDateOptionB,
           cwAfterTimestamp: cwDropTimestamp, // Keeps accurate filter logic tied strictly to the exact drop date
           cwIsClosedWon,
           cwRuleMatched,
