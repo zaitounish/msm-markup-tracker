@@ -744,7 +744,7 @@ export default function App() {
         "Which MSM team are you on?",
         "Seller Name / Source",
         "Store ID",
-        "Type",
+        // Type column removed from here
         "Date (Before)",
         "Initial Markup",
         "Date (After)",
@@ -753,6 +753,9 @@ export default function App() {
         "Rule Matched",
         "Source File",
         "Inflation Type",
+        "Validity",
+        "Email within 45 Days",
+        "Call within 45 Days",
       ],
     ];
 
@@ -761,7 +764,6 @@ export default function App() {
         "Concentrix",
         row.sellerName,
         row.storeId,
-        row.type,
         formatExportDate(row.displayBeforeDate),
         `${row.displayBeforeRate}%`,
         formatExportDate(row.displayAfterDate),
@@ -775,7 +777,10 @@ export default function App() {
               : "No Change",
         row.ruleMatched,
         row.filename,
-        row.type,
+        row.type, // This is the 'Inflation Type'
+        "", // Validity is left blank for manual entry
+        "", // Email is left blank for manual entry
+        "", // Call is left blank for manual entry
       ]);
     });
 
