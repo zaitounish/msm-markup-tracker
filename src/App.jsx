@@ -1201,16 +1201,25 @@ export default function App() {
 
                               {/* Dynamic Backlog Badge */}
                               {(() => {
-                                if (!row.sortTimestamp) return null;
-                                const today = new Date();
-                                const currentQ = Math.floor(
-                                  today.getMonth() / 3,
-                                );
-                                const currentY = today.getFullYear();
+                                if (
+                                  !row.displayAfterDate ||
+                                  row.displayAfterDate === "N/A"
+                                )
+                                  return null;
 
-                                const dropD = new Date(row.sortTimestamp);
-                                const dropQ = Math.floor(dropD.getMonth() / 3);
-                                const dropY = dropD.getFullYear();
+                                const dateParts =
+                                  row.displayAfterDate.split("-");
+                                if (dateParts.length !== 3) return null;
+
+                                const dropY = parseInt(dateParts[0], 10);
+                                const dropM = parseInt(dateParts[1], 10); // 1-12
+                                const dropQ = Math.ceil(dropM / 3);
+
+                                const today = new Date();
+                                const currentY = today.getFullYear();
+                                const currentQ = Math.ceil(
+                                  (today.getMonth() + 1) / 3,
+                                );
 
                                 // It is backlog if the year is older, or if it's the same year but an older quarter
                                 const isBacklog =
@@ -1221,7 +1230,7 @@ export default function App() {
                                   return (
                                     <div
                                       className="text-[10px] font-bold inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-200 text-slate-600 uppercase tracking-wider"
-                                      title="Adjusted win date is prior to the current quarter"
+                                      title={`Win Date (${row.displayAfterDate}) is from a previous quarter`}
                                     >
                                       <Calendar className="w-3 h-3" /> Backlog
                                     </div>
