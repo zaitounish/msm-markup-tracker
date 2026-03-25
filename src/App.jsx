@@ -304,12 +304,12 @@ export default function App() {
         // ENGINE A: STANDARD CLOSED WON LOGIC (Noise-Resistant Update)
         // =========================================================================
         const finalRate = relevantTimeline[relevantTimeline.length - 1].rate;
-        
+
         // 1. Find the Absolute Peak (Before Rate) in the entire filtered timeline
         let absolutePeakRate = -1;
         let absolutePeakDate = null;
         let absolutePeakIndex = 0;
-        
+
         for (let i = 0; i < relevantTimeline.length; i++) {
           if (relevantTimeline[i].rate >= absolutePeakRate) {
             absolutePeakRate = relevantTimeline[i].rate;
@@ -321,7 +321,7 @@ export default function App() {
         // 2. Pre-evaluate if the store is CURRENTLY in a Closed Won state
         const B = absolutePeakRate;
         const A = finalRate;
-        
+
         let cwIsClosedWon = false;
         let cwRuleMatched = "No Change";
         let cwStatusType = "neutral";
@@ -367,12 +367,21 @@ export default function App() {
 
         if (cwIsClosedWon) {
           // It's a win! Scan FORWARD from the peak to find the EXACT DAY the massive drop occurred.
-          for (let i = absolutePeakIndex + 1; i < relevantTimeline.length; i++) {
+          for (
+            let i = absolutePeakIndex + 1;
+            i < relevantTimeline.length;
+            i++
+          ) {
             const currentRate = relevantTimeline[i].rate;
             let isWinNow = false;
-            
+
             if (store.type === "Delivery") {
-              if (B - currentRate >= 5 || currentRate === 0 || (B > 20 && currentRate <= 20)) isWinNow = true;
+              if (
+                B - currentRate >= 5 ||
+                currentRate === 0 ||
+                (B > 20 && currentRate <= 20)
+              )
+                isWinNow = true;
             } else if (store.type === "Pickup") {
               if (B > 1 && currentRate === 0) isWinNow = true;
             }
@@ -389,7 +398,7 @@ export default function App() {
             if (relevantTimeline[i].rate !== finalRate) break;
             cwDropIndex = i;
           }
-          
+
           // Re-adjust Before Rate to only look at dates right before the strict drop
           if (cwDropIndex > 0) {
             cwBeforeRate = -1;
@@ -717,6 +726,19 @@ export default function App() {
   const exportToExcel = () => {
     if (displayStores.length === 0 || !window.XLSX) return;
 
+    // Helper to format YYYY-MM-DD to M/D/YYYY for Excel export
+    const formatExportDate = (dateStr) => {
+      if (!dateStr || dateStr === "N/A") return dateStr;
+      const parts = dateStr.split("-");
+      if (parts.length === 3) {
+        const year = parts[0];
+        const month = parseInt(parts[1], 10);
+        const day = parseInt(parts[2], 10);
+        return `${month}/${day}/${year}`;
+      }
+      return dateStr;
+    };
+
     const wsData = [
       [
         "Which MSM team are you on?",
@@ -740,9 +762,9 @@ export default function App() {
         row.sellerName,
         row.storeId,
         row.type,
-        row.displayBeforeDate,
+        formatExportDate(row.displayBeforeDate),
         `${row.displayBeforeRate}%`,
-        row.displayAfterDate,
+        formatExportDate(row.displayAfterDate),
         `${row.displayAfterRate}%`,
         row.activeStatus === "thirtyDays"
           ? "Maintained 30 Days"
@@ -1163,7 +1185,7 @@ export default function App() {
                             <div className="font-semibold text-slate-800">
                               {row.storeId}
                             </div>
-                            
+
                             <div className="flex flex-wrap items-center gap-1.5 mt-1">
                               {/* Original Delivery/Pickup Badge */}
                               <div
@@ -1176,20 +1198,24 @@ export default function App() {
                               {(() => {
                                 if (!row.sortTimestamp) return null;
                                 const today = new Date();
-                                const currentQ = Math.floor(today.getMonth() / 3);
+                                const currentQ = Math.floor(
+                                  today.getMonth() / 3,
+                                );
                                 const currentY = today.getFullYear();
-                                
+
                                 const dropD = new Date(row.sortTimestamp);
                                 const dropQ = Math.floor(dropD.getMonth() / 3);
                                 const dropY = dropD.getFullYear();
-                                
+
                                 // It is backlog if the year is older, or if it's the same year but an older quarter
-                                const isBacklog = dropY < currentY || (dropY === currentY && dropQ < currentQ);
-                                
+                                const isBacklog =
+                                  dropY < currentY ||
+                                  (dropY === currentY && dropQ < currentQ);
+
                                 if (isBacklog) {
                                   return (
-                                    <div 
-                                      className="text-[10px] font-bold inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-200 text-slate-600 uppercase tracking-wider" 
+                                    <div
+                                      className="text-[10px] font-bold inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-200 text-slate-600 uppercase tracking-wider"
                                       title="Adjusted win date is prior to the current quarter"
                                     >
                                       <Calendar className="w-3 h-3" /> Backlog
