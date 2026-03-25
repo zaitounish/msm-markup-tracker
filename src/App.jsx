@@ -301,45 +301,30 @@ export default function App() {
         if (relevantTimeline.length === 0) return null;
 
         // =========================================================================
-        // ENGINE A: STANDARD CLOSED WON LOGIC (Backward Scan - Option B for Display)
+        // ENGINE A: STANDARD CLOSED WON LOGIC (Noise-Resistant Update)
         // =========================================================================
         const finalRate = relevantTimeline[relevantTimeline.length - 1].rate;
-        let cwAfterRate = finalRate;
-
-        // We find the exact drop point (Option B) for accurate date filtering/sorting AND display
-        let cwDropTimestamp =
-          relevantTimeline[relevantTimeline.length - 1].timestamp;
-        let cwDropIndex = relevantTimeline.length - 1;
-
-        for (let i = relevantTimeline.length - 1; i >= 0; i--) {
-          if (relevantTimeline[i].rate !== finalRate) break;
-          cwDropTimestamp = relevantTimeline[i].timestamp;
-          cwDropIndex = i;
-        }
-
-        // Option B: Grab the exact date the new low rate started for the DISPLAY date
-        let cwAfterDateOptionB = relevantTimeline[cwDropIndex].date;
-
-        let cwBeforeRate = relevantTimeline[0].rate;
-        let cwBeforeDate = relevantTimeline[0].date;
-
-        // To get the tightest window (Option B) for the Before Date, we look at the peak rate right before the drop.
-        // The >= ensures we grab the latest possible date (e.g. Feb 9 instead of Feb 1) if the rate was flat.
-        if (cwDropIndex > 0) {
-          cwBeforeRate = -1;
-          for (let i = 0; i < cwDropIndex; i++) {
-            if (relevantTimeline[i].rate >= cwBeforeRate) {
-              cwBeforeRate = relevantTimeline[i].rate;
-              cwBeforeDate = relevantTimeline[i].date;
-            }
+        
+        // 1. Find the Absolute Peak (Before Rate) in the entire filtered timeline
+        let absolutePeakRate = -1;
+        let absolutePeakDate = null;
+        let absolutePeakIndex = 0;
+        
+        for (let i = 0; i < relevantTimeline.length; i++) {
+          if (relevantTimeline[i].rate >= absolutePeakRate) {
+            absolutePeakRate = relevantTimeline[i].rate;
+            absolutePeakDate = relevantTimeline[i].date;
+            absolutePeakIndex = i;
           }
         }
 
+        // 2. Pre-evaluate if the store is CURRENTLY in a Closed Won state
+        const B = absolutePeakRate;
+        const A = finalRate;
+        
         let cwIsClosedWon = false;
         let cwRuleMatched = "No Change";
         let cwStatusType = "neutral";
-        const B = cwBeforeRate;
-        const A = cwAfterRate;
 
         if (B > A) {
           if (store.type === "Delivery") {
@@ -373,6 +358,55 @@ export default function App() {
           cwRuleMatched = "No Change";
           cwStatusType = "neutral";
         }
+
+        // 3. Determine the exact Drop Date (ignoring minor noise if it's a win)
+        let cwDropIndex = relevantTimeline.length - 1;
+        let cwBeforeRate = B;
+        let cwBeforeDate = absolutePeakDate;
+        let cwAfterRate = finalRate;
+
+        if (cwIsClosedWon) {
+          // It's a win! Scan FORWARD from the peak to find the EXACT DAY the massive drop occurred.
+          for (let i = absolutePeakIndex + 1; i < relevantTimeline.length; i++) {
+            const currentRate = relevantTimeline[i].rate;
+            let isWinNow = false;
+            
+            if (store.type === "Delivery") {
+              if (B - currentRate >= 5 || currentRate === 0 || (B > 20 && currentRate <= 20)) isWinNow = true;
+            } else if (store.type === "Pickup") {
+              if (B > 1 && currentRate === 0) isWinNow = true;
+            }
+
+            if (isWinNow) {
+              cwDropIndex = i;
+              cwAfterRate = currentRate; // Lock in the rate exactly as it was on the initial drop day
+              break;
+            }
+          }
+        } else {
+          // Not a win. Fall back to the original strict backward scan so Natural Deflations remain highly accurate.
+          for (let i = relevantTimeline.length - 1; i >= 0; i--) {
+            if (relevantTimeline[i].rate !== finalRate) break;
+            cwDropIndex = i;
+          }
+          
+          // Re-adjust Before Rate to only look at dates right before the strict drop
+          if (cwDropIndex > 0) {
+            cwBeforeRate = -1;
+            for (let i = 0; i < cwDropIndex; i++) {
+              if (relevantTimeline[i].rate >= cwBeforeRate) {
+                cwBeforeRate = relevantTimeline[i].rate;
+                cwBeforeDate = relevantTimeline[i].date;
+              }
+            }
+          } else {
+            cwBeforeRate = relevantTimeline[0].rate;
+            cwBeforeDate = relevantTimeline[0].date;
+          }
+        }
+
+        let cwDropTimestamp = relevantTimeline[cwDropIndex].timestamp;
+        let cwAfterDateOptionB = relevantTimeline[cwDropIndex].date;
 
         // =========================================================================
         // ENGINE B: MAINTAINED 30 DAYS LOGIC (Forward Scan - Option C)
@@ -1129,11 +1163,43 @@ export default function App() {
                             <div className="font-semibold text-slate-800">
                               {row.storeId}
                             </div>
-                            <div
-                              className={`text-xs font-semibold mt-1 inline-block px-1.5 py-0.5 rounded ${row.type === "Delivery" ? "bg-purple-100 text-purple-700" : "bg-orange-100 text-orange-700"}`}
-                            >
-                              {row.type}
+                            
+                            <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                              {/* Original Delivery/Pickup Badge */}
+                              <div
+                                className={`text-xs font-semibold inline-block px-1.5 py-0.5 rounded ${row.type === "Delivery" ? "bg-purple-100 text-purple-700" : "bg-orange-100 text-orange-700"}`}
+                              >
+                                {row.type}
+                              </div>
+
+                              {/* Dynamic Backlog Badge */}
+                              {(() => {
+                                if (!row.sortTimestamp) return null;
+                                const today = new Date();
+                                const currentQ = Math.floor(today.getMonth() / 3);
+                                const currentY = today.getFullYear();
+                                
+                                const dropD = new Date(row.sortTimestamp);
+                                const dropQ = Math.floor(dropD.getMonth() / 3);
+                                const dropY = dropD.getFullYear();
+                                
+                                // It is backlog if the year is older, or if it's the same year but an older quarter
+                                const isBacklog = dropY < currentY || (dropY === currentY && dropQ < currentQ);
+                                
+                                if (isBacklog) {
+                                  return (
+                                    <div 
+                                      className="text-[10px] font-bold inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-200 text-slate-600 uppercase tracking-wider" 
+                                      title="Adjusted win date is prior to the current quarter"
+                                    >
+                                      <Calendar className="w-3 h-3" /> Backlog
+                                    </div>
+                                  );
+                                }
+                                return null;
+                              })()}
                             </div>
+
                             <div
                               className="text-[10px] text-slate-400 mt-1 uppercase tracking-wider truncate max-w-[120px]"
                               title={row.sellerName}
